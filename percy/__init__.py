@@ -208,27 +208,33 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
 
     def _get_world_vertices(self, sensor: WorldSpaceSensor) -> np.ndarray:
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
-        # In a Z-forward frame (X-right, Y-up), az is in XZ plane, el is in YZ plane.
-        nx = sensor.r_min * tan_az
-        ny = sensor.r_min * tan_el
-        fx = sensor.r_max * tan_az
-        fy = sensor.r_max * tan_el
+
+        # Extents at near plane (Y is horizontal, Z is vertical)
+        ny = sensor.r_min * tan_az
+        nz = sensor.r_min * tan_el
+        # Extents at far plane
+        fy = sensor.r_max * tan_az
+        fz = sensor.r_max * tan_el
+
+        # Define vertices directly in an X-forward coordinate system
         local_verts = np.array(
             [
-                [-nx, -ny, sensor.r_min],
-                [nx, -ny, sensor.r_min],
-                [nx, ny, sensor.r_min],
-                [-nx, ny, sensor.r_min],
-                [-fx, -fy, sensor.r_max],
-                [fx, -fy, sensor.r_max],
-                [fx, fy, sensor.r_max],
-                [-fx, fy, sensor.r_max],  # Corrected vertex
+                # Near plane
+                [sensor.r_min, -ny, -nz],
+                [sensor.r_min, ny, -nz],
+                [sensor.r_min, ny, nz],
+                [sensor.r_min, -ny, nz],
+                # Far plane
+                [sensor.r_max, -fy, -fz],
+                [sensor.r_max, fy, -fz],
+                [sensor.r_max, fy, fz],
+                [sensor.r_max, -fy, fz],
             ]
         )
-        pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
-        x_forward_verts = pre_rotation.apply(local_verts)
+
+        # Apply the sensor's actual world rotation
         world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
-        return world_rotation.apply(x_forward_verts) + sensor.position
+        return world_rotation.apply(local_verts) + sensor.position
 
     def _run_sat_check(self, v1: np.ndarray, v2: np.ndarray) -> bool:
         v1 = np.ascontiguousarray(v1, dtype=np.float64)

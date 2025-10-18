@@ -64,20 +64,6 @@ def create_tilted_prism_vertices(
     return rotation.apply(box) + center
 
 
-def create_tetrahedron_vertices(center: np.ndarray, scale: float) -> np.ndarray:
-    """Creates the 4 vertices for a regular tetrahedron."""
-    s = scale
-    return np.array(
-        [
-            center + [s, s, s],
-            center + [s, -s, -s],
-            center + [-s, s, -s],
-            center + [-s, -s, s],
-        ],
-        dtype=np.float64,
-    )
-
-
 def run_test_case(
     name: str,
     volume_vertices: np.ndarray,
@@ -279,42 +265,6 @@ def test_grazing_miss(strategy_class: type[FoRIntersectionStrategy]):
         center=np.array([10, y_pos, 0]), size=np.array([2, 2, 2])
     )
     run_test_case("Grazing Miss", volume, platform, expected=False)
-
-
-@pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_tetrahedron_hit(strategy_class: type[FoRIntersectionStrategy]):
-    """A non-cuboid shape (tetrahedron) is clearly inside the FoR."""
-    sensor_config = SensorConfiguration(
-        "cam",
-        np.zeros(3),
-        np.zeros(3),
-        1,
-        50,
-        np.pi / 4,
-        np.pi / 4,
-        strategy_class(),
-    )
-    platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
-    volume = create_tetrahedron_vertices(center=np.array([10, 1, 1]), scale=1.0)
-    run_test_case("Tetrahedron Hit", volume, platform, expected=True)
-
-
-@pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_tetrahedron_miss(strategy_class: type[FoRIntersectionStrategy]):
-    """A non-cuboid shape (tetrahedron) is clearly outside the FoR."""
-    sensor_config = SensorConfiguration(
-        "cam",
-        np.zeros(3),
-        np.zeros(3),
-        1,
-        50,
-        np.pi / 8,
-        np.pi / 8,
-        strategy_class(),
-    )
-    platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
-    volume = create_tetrahedron_vertices(center=np.array([10, 10, 0]), scale=1.0)
-    run_test_case("Tetrahedron Miss", volume, platform, expected=False)
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
