@@ -20,11 +20,10 @@ from scipy.spatial.transform import Rotation
 # Import the core simulation classes from the main library
 from percy import (
     Platform,
-    WorldSpaceSensor,
-    PyramidalSATStrategy,
     PyramidalGJKStrategy,
+    PyramidalSATStrategy,
     SphericalAccurateStrategy,
-    SensorConfiguration,
+    WorldSpaceSensor,
 )
 
 
@@ -73,15 +72,16 @@ def get_platform_axes_plot(
     platform: Platform, length: float = 5.0
 ) -> list[go.Scatter3d]:
     """Creates three lines (RGB) representing the platform's local XYZ axes."""
-    rot = Rotation.from_euler("zyx", platform.rpy[[2, 1, 0]]).as_matrix()
+    rot = Rotation.from_euler("zyx", platform.rpy[[2, 1, 0]])
     origin = platform.position
-    x_axis, y_axis, z_axis = rot.T @ (np.eye(3) * length)
+    # Define the local axes and rotate them into the world frame
+    x_axis, y_axis, z_axis = rot.apply(np.eye(3) * length)
 
     return [
         go.Scatter3d(
             x=[origin[0], origin[0] + x_axis[0]],
-            y=[origin[1], origin[1] + y_axis[1]],
-            z=[origin[2], origin[2] + z_axis[2]],
+            y=[origin[1], origin[1] + x_axis[1]],
+            z=[origin[2], origin[2] + x_axis[2]],
             mode="lines",
             line=dict(color="red", width=4),
             name=f"{platform.name} X",
@@ -89,7 +89,7 @@ def get_platform_axes_plot(
         go.Scatter3d(
             x=[origin[0], origin[0] + y_axis[0]],
             y=[origin[1], origin[1] + y_axis[1]],
-            z=[origin[2], origin[2] + z_axis[2]],
+            z=[origin[2], origin[2] + y_axis[2]],
             mode="lines",
             line=dict(color="green", width=4),
             name=f"{platform.name} Y",
@@ -128,25 +128,23 @@ def plot_spherical_for(
 ) -> list[go.Surface]:
     """Generates plottable Surface objects for a spherical sector FoR."""
     resolution = 50j
-    theta, phi = np.mgrid[
+    # We build the sphere pointing along +X to match the standard coordinate system
+    az, el = np.mgrid[
         -sensor.az_half_angle : sensor.az_half_angle : resolution,
         -sensor.el_half_angle : sensor.el_half_angle : resolution,
     ]
-    x_local = np.cos(phi) * np.sin(theta)
-    y_local = np.sin(phi)
-    z_local = np.cos(phi) * np.cos(theta)
+    x_local = np.cos(el) * np.cos(az)
+    y_local = np.cos(el) * np.sin(az)
+    z_local = np.sin(el)
 
-    rot = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]]).as_matrix()
+    world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
 
-    near_points = np.vstack(
-        [x.ravel() * sensor.r_min for x in [x_local, y_local, z_local]]
-    ).T
-    far_points = np.vstack(
-        [x.ravel() * sensor.r_max for x in [x_local, y_local, z_local]]
-    ).T
+    def _create_surface_points(radius: float) -> np.ndarray:
+        points = np.stack([x.ravel() * radius for x in [x_local, y_local, z_local]], -1)
+        return world_rotation.apply(points) + sensor.position
 
-    near_world = (near_points @ rot + sensor.position).reshape((*x_local.shape, 3))
-    far_world = (far_points @ rot + sensor.position).reshape((*x_local.shape, 3))
+    near_world = _create_surface_points(sensor.r_min).reshape(*x_local.shape, 3)
+    far_world = _create_surface_points(sensor.r_max).reshape(*x_local.shape, 3)
 
     name = f"{sensor.name} (Spherical)"
     surfaces = [
@@ -155,7 +153,7 @@ def plot_spherical_for(
             y=near_world[..., 1],
             z=near_world[..., 2],
             colorscale=[[0, color], [1, color]],
-            opacity=0.2,
+            opacity=0.1,
             showscale=False,
             name=name,
         ),
@@ -164,7 +162,7 @@ def plot_spherical_for(
             y=far_world[..., 1],
             z=far_world[..., 2],
             colorscale=[[0, color], [1, color]],
-            opacity=0.2,
+            opacity=0.1,
             showscale=False,
             showlegend=False,
         ),
@@ -172,7 +170,7 @@ def plot_spherical_for(
 
     # Add side surfaces to connect near and far planes
     for i in [0, -1]:
-        # Top and Bottom sides
+        # Top and Bottom sides (connecting along elevation edges)
         surfaces.append(
             go.Surface(
                 x=np.vstack([near_world[:, i, 0], far_world[:, i, 0]]),
@@ -181,10 +179,10 @@ def plot_spherical_for(
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
                 showlegend=False,
-                opacity=0.2,
+                opacity=0.1,
             )
         )
-        # Left and Right sides
+        # Left and Right sides (connecting along azimuth edges)
         surfaces.append(
             go.Surface(
                 x=np.vstack([near_world[i, :, 0], far_world[i, :, 0]]),
@@ -193,7 +191,7 @@ def plot_spherical_for(
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
                 showlegend=False,
-                opacity=0.2,
+                opacity=0.1,
             )
         )
 
@@ -222,7 +220,7 @@ def visualise_scene(platforms: Sequence[Platform], volumes: list[np.ndarray]):
     for i, volume in enumerate(volumes):
         for sensor in all_world_sensors:
             if sensor.can_observe_volume(volume):
-                sensors_with_hits.add((sensor.name, tuple(sensor.position)))
+                sensors_with_hits.add(id(sensor))
                 volumes_that_are_seen.add(i)
 
     # --- Step 2: Plot all scene objects with appropriate colors ---
@@ -231,7 +229,7 @@ def visualise_scene(platforms: Sequence[Platform], volumes: list[np.ndarray]):
             fig.add_trace(trace)
 
     for sensor in all_world_sensors:
-        is_hit = (sensor.name, tuple(sensor.position)) in sensors_with_hits
+        is_hit = id(sensor) in sensors_with_hits
         hit_color = "limegreen"
 
         if isinstance(sensor.strategy, (PyramidalSATStrategy, PyramidalGJKStrategy)):
@@ -240,12 +238,12 @@ def visualise_scene(platforms: Sequence[Platform], volumes: list[np.ndarray]):
             )
         elif isinstance(sensor.strategy, SphericalAccurateStrategy):
             for trace in plot_spherical_for(
-                sensor, color=hit_color if is_hit else "cyan"
+                sensor, color=hit_color if is_hit else "red"
             ):
                 fig.add_trace(trace)
 
     for i, volume in enumerate(volumes):
-        color = "limegreen" if i in volumes_that_are_seen else "blue"
+        color = "limegreen" if i in volumes_that_are_seen else "red"
         fig.add_trace(get_volume_plot(volume, name=f"Target {i + 1}", color=color))
 
     # --- Step 3: Configure and show the final plot ---
@@ -261,67 +259,3 @@ def visualise_scene(platforms: Sequence[Platform], volumes: list[np.ndarray]):
         margin=dict(l=0, r=0, b=0, t=40),
     )
     fig.show()
-
-
-# ======================================================================
-# Example Usage
-# ======================================================================
-
-if __name__ == "__main__":
-
-    def create_box(center, size=10.0):
-        h = size / 2.0
-        c = np.array(center)
-        return np.array(
-            [
-                c + [-h, -h, -h],
-                c + [h, -h, -h],
-                c + [h, h, -h],
-                c + [-h, h, -h],
-                c + [-h, -h, h],
-                c + [h, -h, h],
-                c + [h, h, h],
-                c + [-h, h, h],
-            ]
-        )
-
-    camera_config = SensorConfiguration(
-        name="nose_cam",
-        relative_position=np.array([5, 0, 0]),
-        relative_rpy=np.zeros(3),
-        r_min=1.0,
-        r_max=80.0,
-        az_half_angle=np.pi / 10,
-        el_half_angle=np.pi / 10,
-        strategy=PyramidalSATStrategy(),
-    )
-    radar_config = SensorConfiguration(
-        name="surveillance_radar",
-        relative_position=np.zeros(3),
-        relative_rpy=np.array([0, np.pi / 6, 0]),
-        r_min=1.0,
-        r_max=150.0,
-        az_half_angle=np.pi / 4,
-        el_half_angle=np.pi / 4,
-        strategy=SphericalAccurateStrategy(),
-    )
-
-    aircraft = Platform(
-        name="Aircraft",
-        position=np.array([10, 20, 50]),
-        rpy=np.array([0, 0, np.deg2rad(45)]),
-        components=[camera_config, radar_config],
-    )
-    drone = Platform(
-        name="Drone",
-        position=np.array([-40, 60, 30]),
-        rpy=np.array([0, np.deg2rad(15), np.deg2rad(-90)]),
-        components=[camera_config],
-    )
-
-    targets = [
-        create_box(center=[80, 80, 50]),  # Should be seen by the aircraft's radar
-        create_box(center=[-150, 0, 0]),  # Should be missed
-    ]
-
-    visualise_scene(platforms=[aircraft, drone], volumes=targets)
