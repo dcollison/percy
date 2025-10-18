@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Sequence, Optional
+from typing import Optional, Sequence
 
 import numba
 import numpy as np
@@ -127,14 +127,61 @@ def _run_gjk_check_jit(v1: np.ndarray, v2: np.ndarray) -> bool:
     return False
 
 
+# ======================================================================
 # JIT Warm-up
-try:
-    _warmup_verts = np.zeros((4, 3), dtype=np.float64)
-    _warmup_axes = np.zeros((1, 3), dtype=np.float64)
-    _is_overlapping_jit(_warmup_axes, _warmup_verts, _warmup_verts)
-    _run_gjk_check_jit(_warmup_verts, _warmup_verts)
-except Exception:
-    pass
+# ======================================================================
+
+
+def _warmup_jit_functions():
+    """
+    Calls the JIT-compiled functions with realistic, non-trivial inputs to
+    ensure they are compiled before the first real use. This avoids a
+    performance penalty on the first call in a time-sensitive context.
+    """
+    try:
+        # A simple cube is a good representative convex shape.
+        # It has 8 vertices and 6 faces.
+        box = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [1, 1, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 0, 1],
+                [1, 1, 1],
+                [0, 1, 1],
+            ],
+            dtype=np.float64,
+        )
+
+        # Warm up GJK with two distinct objects
+        box2 = box + 2.0
+        _run_gjk_check_jit(box, box2)
+
+        # Warm up SAT and its helper `_project_jit` with an `axes` array
+        # that has a more realistic shape (e.g., 6 normals for a cube).
+        axes = np.array(
+            [
+                [1, 0, 0],
+                [-1, 0, 0],
+                [0, 1, 0],
+                [0, -1, 0],
+                [0, 0, 1],
+                [0, 0, -1],
+            ],
+            dtype=np.float64,
+        )
+        _is_overlapping_jit(axes, box, box2)
+
+    except Exception:
+        # If warmup fails (e.g., due to library issues), it's not critical.
+        # The functions will just compile on their first real run.
+        pass
+
+
+# Run the warmup procedure when the module is imported.
+_warmup_jit_functions()
 
 
 # ======================================================================
@@ -278,6 +325,7 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
         nx, ny = sensor.r_min * tan_az, sensor.r_min * tan_el
         fx, fy = sensor.r_max * tan_az, sensor.r_max * tan_el
+        # Frustum pointing along local +Z axis
         local_verts = np.array(
             [
                 [-nx, -ny, sensor.r_min],
@@ -290,14 +338,21 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
                 [-fx, fy, sensor.r_max],
             ]
         )
-        rot = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]]).as_matrix()
-        return local_verts @ rot + sensor.position
+
+        # Pre-rotate to align with standard coordinate system (+X forward)
+        # A +90 degree pitch makes the +Z pointing vector become +X
+        pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
+        x_forward_verts = pre_rotation.apply(local_verts)
+
+        # Apply the sensor's actual world rotation
+        world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
+        return world_rotation.apply(x_forward_verts) + sensor.position
 
     def _run_sat_check(self, v1: np.ndarray, v2: np.ndarray) -> bool:
         v1, v2 = v1.astype(np.float64), v2.astype(np.float64)
         try:
             h1, h2 = Delaunay(v1, qhull_options="QJ"), Delaunay(v2, qhull_options="QJ")
-        except:
+        except Exception:
             return True
         if not _is_overlapping_jit(self._get_face_normals(h1), v1, v2):
             return False
@@ -351,6 +406,7 @@ class PyramidalGJKStrategy(FoRIntersectionStrategy):
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
         nx, ny = sensor.r_min * tan_az, sensor.r_min * tan_el
         fx, fy = sensor.r_max * tan_az, sensor.r_max * tan_el
+        # Frustum pointing along local +Z axis
         local_verts = np.array(
             [
                 [-nx, -ny, sensor.r_min],
@@ -363,38 +419,76 @@ class PyramidalGJKStrategy(FoRIntersectionStrategy):
                 [-fx, fy, sensor.r_max],
             ]
         )
-        rot = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]]).as_matrix()
-        return local_verts @ rot + sensor.position
+
+        # Pre-rotate to align with standard coordinate system (+X forward)
+        pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
+        x_forward_verts = pre_rotation.apply(local_verts)
+
+        # Apply the sensor's actual world rotation
+        world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
+        return world_rotation.apply(x_forward_verts) + sensor.position
 
 
 class SphericalAccurateStrategy(FoRIntersectionStrategy):
-    """A robust strategy for a directional spherical sector FoR."""
+    """
+    A robust strategy for a directional spherical sector FoR that handles
+    vertex containment, origin containment, and piercing scenarios.
+    """
 
     def check_intersection(
         self, sensor: WorldSpaceSensor, volume_vertices: np.ndarray
     ) -> bool:
-        rot = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]]).as_matrix()
-        local_vertices = (volume_vertices - sensor.position) @ rot.T
-        for p in local_vertices:
-            dist = np.linalg.norm(p)
-            if (
-                sensor.r_min <= dist <= sensor.r_max
-                and p[2] > 0
-                and abs(np.arctan2(p[0], p[2])) <= sensor.az_half_angle
-                and abs(np.arctan2(p[1], p[2])) <= sensor.el_half_angle
-            ):
-                return True
-        min_p, max_p = np.min(local_vertices, 0), np.max(local_vertices, 0)
-        if (
-            min_p[0] <= 0 <= max_p[0]
-            and min_p[1] <= 0 <= max_p[1]
-            and max_p[2] >= sensor.r_min
-            and min_p[2] <= sensor.r_max
-        ):
+        # Transform vertices into the sensor's local frame (+X is forward)
+        world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
+        local_vertices = world_rotation.apply(
+            volume_vertices - sensor.position, inverse=True
+        )
+
+        # --- 1. Fast check for origin containment (sensor inside target AABB) ---
+        min_vals = np.min(local_vertices, axis=0)
+        max_vals = np.max(local_vertices, axis=0)
+        if np.all(min_vals < 0) and np.all(max_vals > 0):
             return True
-        w_min, w_max = np.min(volume_vertices, 0), np.max(volume_vertices, 0)
-        if np.all(w_min < sensor.position) and np.all(sensor.position < w_max):
+
+        # --- 2. Check if any vertex is inside the FoR ---
+        x, y, z = local_vertices.T
+        tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
+
+        # Efficiently check if points are inside an elliptical cone along +X
+        # The equation is: (y^2 / (x*tan_az)^2) + (z^2 / (x*tan_el)^2) <= 1
+        # We rearrange to avoid division: y^2*tan_el^2 + z^2*tan_az^2 <= x^2*tan_az^2*tan_el^2
+        inside_cone = (y**2 * tan_el**2 + z**2 * tan_az**2) <= (
+            x**2 * tan_az**2 * tan_el**2 + 1e-9
+        )
+
+        ranges_sq = x**2 + y**2 + z**2
+        is_inside = (
+            inside_cone
+            & (ranges_sq >= sensor.r_min**2)
+            & (ranges_sq <= sensor.r_max**2)
+            & (x > 0)
+        )
+
+        if np.any(is_inside):
             return True
+
+        # --- 3. Check for piercing (AABB of target intersects sensor's boresight) ---
+        # This is an approximation that catches many "stabbing" cases where no
+        # vertex is inside the FoR, but the volume still passes through it.
+        min_y, min_z = min_vals[1], min_vals[2]
+        max_y, max_z = max_vals[1], max_vals[2]
+        min_x, max_x = min_vals[0], max_vals[0]
+
+        # Check if the X-axis (boresight) passes through the YZ-plane AABB
+        x_axis_pierces_yz_plane = (
+            min_y <= 0 and max_y >= 0 and min_z <= 0 and max_z >= 0
+        )
+        # Check if the range of the AABB overlaps with the sensor's min/max range
+        x_ranges_overlap = max_x >= sensor.r_min and min_x <= sensor.r_max
+
+        if x_axis_pierces_yz_plane and x_ranges_overlap:
+            return True
+
         return False
 
 

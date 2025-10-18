@@ -6,7 +6,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from percy import Platform, SensorSystem, SensorConfiguration, PyramidalSATStrategy
-from plotting_tools import visualise_scene
+from tests.plotting_tools import visualise_scene
 
 ENABLE_PLOTTING: bool = False
 
@@ -74,25 +74,41 @@ def test_platform_with_rotation():
 
 
 def test_sensor_with_relative_rotation():
+    """
+    Verifies that a sensor's relative rotation is correctly composed with its
+    parent platform's rotation.
+    """
+    # Define a sensor with a 45-degree pitch (rotation around its local Y-axis)
     sensor_config = SensorConfiguration(
         "cam",
         np.zeros(3),
-        np.array([0, np.pi / 4, 0]),
+        np.array([0, np.pi / 4, 0]),  # Roll, Pitch, Yaw
         1,
         10,
         np.pi / 4,
         np.pi / 4,
         PyramidalSATStrategy(),
     )
+    # Define a platform with a 90-degree yaw (rotation around the world Z-axis)
     platform = Platform(
         "p1", np.zeros(3), np.array([0, 0, np.pi / 2]), components=[sensor_config]
     )
 
+    # Get the final sensor state in world coordinates
     sensor = platform.get_all_world_sensors()[0]
 
-    expected_rot = Rotation.from_euler("zyx", [np.pi / 2, np.pi / 4, 0])
+    # --- Verification ---
+    # The final rotation should be the composition of the platform's rotation
+    # followed by the sensor's relative rotation. The test logic must
+    # replicate this composition to calculate the correct expected result.
+    platform_rot = Rotation.from_euler("zyx", [np.pi / 2, 0, 0])
+    sensor_relative_rot = Rotation.from_euler("zyx", [0, np.pi / 4, 0])
+    expected_rot = platform_rot * sensor_relative_rot
+
+    # The actual rotation from the implementation
     actual_rot = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
 
+    # Compare the resulting rotation matrices
     np.testing.assert_allclose(
         actual_rot.as_matrix(), expected_rot.as_matrix(), atol=1e-6
     )
