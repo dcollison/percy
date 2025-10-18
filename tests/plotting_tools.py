@@ -4,7 +4,7 @@ Plotting Tools for the Percy Sensor Simulation Framework.
 This module provides functions to generate interactive 3D visualizations
 of Platforms, their Sensor Fields of Regard, and target volumes using Plotly.
 
-The main entry point is `visualize_scene`, which can render a complete scenario
+The main entry point is `visualise_scene`, which can render a complete scenario
 with multiple platforms, automatically color-coding the results of visibility checks.
 """
 
@@ -114,9 +114,9 @@ def plot_pyramidal_for(
     sensor: WorldSpaceSensor, color: str = "red"
 ) -> go.Mesh3d | go.Scatter3d:
     """Generates a plottable Mesh3d object for a pyramidal FoR."""
-    strategy = sensor.strategy
-    if hasattr(strategy, "_get_world_vertices"):
-        world_verts = strategy._get_world_vertices(sensor)
+    # This is a protected member, but for a plotting utility it's acceptable.
+    if hasattr(sensor.strategy, "_get_world_vertices"):
+        world_verts = sensor.strategy._get_world_vertices(sensor)
         return get_volume_plot(
             world_verts, name=f"{sensor.name} (Pyramidal)", color=color, opacity=0.1
         )
@@ -127,9 +127,10 @@ def plot_spherical_for(
     sensor: WorldSpaceSensor, color: str = "cyan"
 ) -> list[go.Surface]:
     """Generates plottable Surface objects for a spherical sector FoR."""
+    resolution = 50j
     theta, phi = np.mgrid[
-        -sensor.az_half_angle : sensor.az_half_angle : 50j,
-        -sensor.el_half_angle : sensor.el_half_angle : 50j,
+        -sensor.az_half_angle : sensor.az_half_angle : resolution,
+        -sensor.el_half_angle : sensor.el_half_angle : resolution,
     ]
     x_local = np.cos(phi) * np.sin(theta)
     y_local = np.sin(phi)
@@ -144,30 +145,59 @@ def plot_spherical_for(
         [x.ravel() * sensor.r_max for x in [x_local, y_local, z_local]]
     ).T
 
-    near_world = near_points @ rot + sensor.position
-    far_world = far_points @ rot + sensor.position
+    near_world = (near_points @ rot + sensor.position).reshape((*x_local.shape, 3))
+    far_world = (far_points @ rot + sensor.position).reshape((*x_local.shape, 3))
 
     name = f"{sensor.name} (Spherical)"
-    return [
+    surfaces = [
         go.Surface(
-            x=near_world[:, 0].reshape(x_local.shape),
-            y=near_world[:, 1].reshape(x_local.shape),
-            z=near_world[:, 2].reshape(x_local.shape),
+            x=near_world[..., 0],
+            y=near_world[..., 1],
+            z=near_world[..., 2],
             colorscale=[[0, color], [1, color]],
             opacity=0.2,
             showscale=False,
             name=name,
         ),
         go.Surface(
-            x=far_world[:, 0].reshape(x_local.shape),
-            y=far_world[:, 1].reshape(x_local.shape),
-            z=far_world[:, 2].reshape(x_local.shape),
+            x=far_world[..., 0],
+            y=far_world[..., 1],
+            z=far_world[..., 2],
             colorscale=[[0, color], [1, color]],
             opacity=0.2,
             showscale=False,
             showlegend=False,
         ),
     ]
+
+    # Add side surfaces to connect near and far planes
+    for i in [0, -1]:
+        # Top and Bottom sides
+        surfaces.append(
+            go.Surface(
+                x=np.vstack([near_world[:, i, 0], far_world[:, i, 0]]),
+                y=np.vstack([near_world[:, i, 1], far_world[:, i, 1]]),
+                z=np.vstack([near_world[:, i, 2], far_world[:, i, 2]]),
+                colorscale=[[0, color], [1, color]],
+                showscale=False,
+                showlegend=False,
+                opacity=0.2,
+            )
+        )
+        # Left and Right sides
+        surfaces.append(
+            go.Surface(
+                x=np.vstack([near_world[i, :, 0], far_world[i, :, 0]]),
+                y=np.vstack([near_world[i, :, 1], far_world[i, :, 1]]),
+                z=np.vstack([near_world[i, :, 2], far_world[i, :, 2]]),
+                colorscale=[[0, color], [1, color]],
+                showscale=False,
+                showlegend=False,
+                opacity=0.2,
+            )
+        )
+
+    return surfaces
 
 
 # ======================================================================
