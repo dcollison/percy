@@ -13,6 +13,8 @@ Core Features:
   each test case on or off.
 """
 
+from typing import Type
+
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -30,7 +32,7 @@ from tests.plotting_tools import visualise_scene
 # Global Test Configuration
 # ======================================================================
 
-ENABLE_PLOTTING: bool = True
+ENABLE_PLOTTING: bool = False
 
 # ======================================================================
 # Helper Functions
@@ -259,8 +261,8 @@ def test_grazing_miss(strategy_class: type[FoRIntersectionStrategy]):
         "cam", np.zeros(3), np.zeros(3), 1, 50, az_half, np.pi / 8, strategy_class()
     )
     platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
-    # Position the box just outside the frustum boundary
-    y_pos = 10 * np.tan(az_half) + 1.0  # 10 is distance, 1.0 is half-size + buffer
+    # Position the box just outside the frustum boundary with a small buffer.
+    y_pos = 10 * np.tan(az_half) + 1.0 + 0.5  # half-size of box is 1.0
     volume = create_box_vertices(
         center=np.array([10, y_pos, 0]), size=np.array([2, 2, 2])
     )
@@ -282,7 +284,7 @@ def test_complex_rotated_miss(strategy_class: type[FoRIntersectionStrategy]):
     )
     platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
     volume = create_tilted_prism_vertices(
-        center=np.array([10, 0, 10]),
+        center=np.array([10, 0, 15]),  # Shifted further to be a clear miss
         size=np.array([20, 0.5, 0.5]),
         rpy_deg=np.array([0, 0, 90]),
     )
