@@ -13,8 +13,6 @@ Core Features:
   each test case on or off.
 """
 
-from typing import Type
-
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -32,7 +30,7 @@ from tests.plotting_tools import visualise_scene
 # Global Test Configuration
 # ======================================================================
 
-ENABLE_PLOTTING: bool = False
+ENABLE_PLOTTING: bool = True
 
 # ======================================================================
 # Helper Functions
@@ -66,6 +64,20 @@ def create_tilted_prism_vertices(
     return rotation.apply(box) + center
 
 
+def create_tetrahedron_vertices(center: np.ndarray, scale: float) -> np.ndarray:
+    """Creates the 4 vertices for a regular tetrahedron."""
+    s = scale
+    return np.array(
+        [
+            center + [s, s, s],
+            center + [s, -s, -s],
+            center + [-s, s, -s],
+            center + [-s, -s, s],
+        ],
+        dtype=np.float64,
+    )
+
+
 def run_test_case(
     name: str,
     volume_vertices: np.ndarray,
@@ -88,7 +100,7 @@ def run_test_case(
 
     print(f"  Result={can_see}, Expected={expected}")
 
-    if ENABLE_PLOTTING:
+    if ENABLE_PLOTTING and can_see != expected:
         visualise_scene(platforms=[platform], volumes=[volume_vertices])
 
     assert can_see == expected, f"Failed test '{test_name}'"
@@ -104,7 +116,7 @@ ALL_STRATEGIES = [PyramidalSATStrategy, SphericalAccurateStrategy]
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_simple_hit(strategy_class: Type[FoRIntersectionStrategy]):
+def test_simple_hit(strategy_class: type[FoRIntersectionStrategy]):
     """Volume is directly in front of and inside the sensor's FoR."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -122,7 +134,7 @@ def test_simple_hit(strategy_class: Type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_simple_miss(strategy_class: Type[FoRIntersectionStrategy]):
+def test_simple_miss(strategy_class: type[FoRIntersectionStrategy]):
     """Volume is far to the side, completely outside the FoR."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -140,7 +152,7 @@ def test_simple_miss(strategy_class: Type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_volume_behind_sensor(strategy_class: Type[FoRIntersectionStrategy]):
+def test_volume_behind_sensor(strategy_class: type[FoRIntersectionStrategy]):
     """Volume is entirely behind the sensor's origin."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -158,7 +170,7 @@ def test_volume_behind_sensor(strategy_class: Type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_volume_too_close(strategy_class: Type[FoRIntersectionStrategy]):
+def test_volume_too_close(strategy_class: type[FoRIntersectionStrategy]):
     """Volume is in the view cone but closer than the minimum range."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -176,7 +188,7 @@ def test_volume_too_close(strategy_class: Type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_volume_too_far(strategy_class: Type[FoRIntersectionStrategy]):
+def test_volume_too_far(strategy_class: type[FoRIntersectionStrategy]):
     """Volume is in the view cone but beyond the maximum range."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -194,7 +206,7 @@ def test_volume_too_far(strategy_class: Type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_rotated_sensor_hit(strategy_class: Type[FoRIntersectionStrategy]):
+def test_rotated_sensor_hit(strategy_class: type[FoRIntersectionStrategy]):
     """Sensor is rotated to face a volume that would otherwise be missed."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -207,14 +219,13 @@ def test_rotated_sensor_hit(strategy_class: Type[FoRIntersectionStrategy]):
         strategy_class(),
     )
     platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
-    # This target is at a 45-degree angle from the sensor's original boresight
     target_pos = 10 * np.array([np.cos(np.pi / 4), np.sin(np.pi / 4), 0])
     volume = create_box_vertices(center=target_pos, size=np.array([1, 1, 1]))
     run_test_case("Rotated Sensor Hit", volume, platform, expected=True)
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_piercing_volume_hit(strategy_class: Type[FoRIntersectionStrategy]):
+def test_piercing_volume_hit(strategy_class: type[FoRIntersectionStrategy]):
     """A long, thin volume pierces the FoR without any vertices inside."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -227,16 +238,15 @@ def test_piercing_volume_hit(strategy_class: Type[FoRIntersectionStrategy]):
         strategy_class(),
     )
     platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
-    volume = create_tilted_prism_vertices(
+    volume = create_box_vertices(
         center=np.array([10, 0, 0]),
-        size=np.array([0.1, 20, 0.1]),  # A long "needle"
-        rpy_deg=np.array([0, 0, 0]),
+        size=np.array([0.1, 20, 0.1]),
     )
     run_test_case("Piercing Volume Hit", volume, platform, expected=True)
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_sensor_inside_volume(strategy_class: Type[FoRIntersectionStrategy]):
+def test_sensor_inside_volume(strategy_class: type[FoRIntersectionStrategy]):
     """The sensor's origin is located inside the target volume."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -251,6 +261,121 @@ def test_sensor_inside_volume(strategy_class: Type[FoRIntersectionStrategy]):
     platform = Platform(
         "p1", np.array([10, 0, 0]), np.zeros(3), components=[sensor_config]
     )
-    # A large box centered at the same location as the sensor
     volume = create_box_vertices(center=np.array([10, 0, 0]), size=np.array([5, 5, 5]))
     run_test_case("Sensor Inside Volume", volume, platform, expected=True)
+
+
+@pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
+def test_grazing_miss(strategy_class: type[FoRIntersectionStrategy]):
+    """Volume is very close to the edge of the FoR but does not intersect."""
+    az_half = np.pi / 8
+    sensor_config = SensorConfiguration(
+        "cam", np.zeros(3), np.zeros(3), 1, 50, az_half, np.pi / 8, strategy_class()
+    )
+    platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
+    # Position the box just outside the frustum boundary
+    y_pos = 10 * np.tan(az_half) + 1.0  # 10 is distance, 1.0 is half-size + buffer
+    volume = create_box_vertices(
+        center=np.array([10, y_pos, 0]), size=np.array([2, 2, 2])
+    )
+    run_test_case("Grazing Miss", volume, platform, expected=False)
+
+
+@pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
+def test_tetrahedron_hit(strategy_class: type[FoRIntersectionStrategy]):
+    """A non-cuboid shape (tetrahedron) is clearly inside the FoR."""
+    sensor_config = SensorConfiguration(
+        "cam",
+        np.zeros(3),
+        np.zeros(3),
+        1,
+        50,
+        np.pi / 4,
+        np.pi / 4,
+        strategy_class(),
+    )
+    platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
+    volume = create_tetrahedron_vertices(center=np.array([10, 1, 1]), scale=1.0)
+    run_test_case("Tetrahedron Hit", volume, platform, expected=True)
+
+
+@pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
+def test_tetrahedron_miss(strategy_class: type[FoRIntersectionStrategy]):
+    """A non-cuboid shape (tetrahedron) is clearly outside the FoR."""
+    sensor_config = SensorConfiguration(
+        "cam",
+        np.zeros(3),
+        np.zeros(3),
+        1,
+        50,
+        np.pi / 8,
+        np.pi / 8,
+        strategy_class(),
+    )
+    platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
+    volume = create_tetrahedron_vertices(center=np.array([10, 10, 0]), scale=1.0)
+    run_test_case("Tetrahedron Miss", volume, platform, expected=False)
+
+
+@pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
+def test_complex_rotated_miss(strategy_class: type[FoRIntersectionStrategy]):
+    """A thin, rotated prism that should be missed by a complexly rotated sensor."""
+    sensor_config = SensorConfiguration(
+        "cam",
+        np.zeros(3),
+        np.array([np.pi / 4, 0, np.pi / 4]),  # Roll and Yaw
+        1,
+        50,
+        np.pi / 12,
+        np.pi / 12,
+        strategy_class(),
+    )
+    platform = Platform("p1", np.zeros(3), np.zeros(3), components=[sensor_config])
+    volume = create_tilted_prism_vertices(
+        center=np.array([10, 0, 10]),
+        size=np.array([20, 0.5, 0.5]),
+        rpy_deg=np.array([0, 0, 90]),
+    )
+    run_test_case("Complex Rotated Miss", volume, platform, expected=False)
+
+
+def test_pyramidal_sees_spherical_misses():
+    """
+    Tests the specific geometric case where a pyramidal FoR sees an object
+    in its corner that a spherical FoR with the same angles misses.
+    """
+    az_half = np.pi / 6
+    el_half = np.pi / 6
+    distance = 10.0
+
+    # The point at the corner of the pyramid's base
+    y_pos = distance * np.tan(az_half)
+    z_pos = distance * np.tan(el_half)
+    volume = create_box_vertices(
+        center=np.array([distance, y_pos, z_pos]), size=np.array([0.5, 0.5, 0.5])
+    )
+
+    # --- Test Pyramidal Strategy (should be a HIT) ---
+    pyramidal_config = SensorConfiguration(
+        "cam", np.zeros(3), np.zeros(3), 1, 50, az_half, el_half, PyramidalSATStrategy()
+    )
+    platform_pyr = Platform(
+        "p1", np.zeros(3), np.zeros(3), components=[pyramidal_config]
+    )
+    run_test_case("Pyramid Corner Hit", volume, platform_pyr, expected=True)
+
+    # --- Test Spherical Strategy (should be a MISS) ---
+    spherical_config = SensorConfiguration(
+        "cam",
+        np.zeros(3),
+        np.zeros(3),
+        1,
+        50,
+        az_half,
+        el_half,
+        SphericalAccurateStrategy(),
+    )
+    platform_sph = Platform(
+        "p1", np.zeros(3), np.zeros(3), components=[spherical_config]
+    )
+    run_test_case("Spherical Corner Miss", volume, platform_sph, expected=False)

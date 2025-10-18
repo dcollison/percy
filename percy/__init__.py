@@ -222,7 +222,7 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
                 [-fx, -fy, sensor.r_max],
                 [fx, -fy, sensor.r_max],
                 [fx, fy, sensor.r_max],
-                [-fx, -fy, sensor.r_max],
+                [-fx, fy, sensor.r_max],  # Corrected vertex
             ]
         )
         pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
