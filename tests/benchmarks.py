@@ -94,7 +94,7 @@ def benchmark_performance(num_volumes: int):
     )
 
 
-def benchmark_accuracy(num_volumes: int):
+def benchmark_accuracy(num_volumes: int) -> dict[str, defaultdict[str, int]]:
     print("\n" + "=" * 50)
     print("  Accuracy Benchmark: Approximate vs. Exact")
     print("=" * 50)
@@ -108,61 +108,72 @@ def benchmark_accuracy(num_volumes: int):
         "el_half_angle": np.pi / 4,
     }
 
-    configs = {
-        "Spherical (Accurate)": SensorConfiguration(
-            "sph", **sensor_params, strategy=SphericalAccurateStrategy()
-        ),
-    }
-    ground_truth_config = SensorConfiguration(
-        "ground_truth", **sensor_params, strategy=PyramidalSATStrategy()
+    test_config = SensorConfiguration(
+        "sph", **sensor_params, strategy=SphericalAccurateStrategy()
     )
 
-    all_results = {}
+    # --- Create a more comparable ground truth ---
+    # To make a fair comparison, the ground truth pyramid must be adjusted to
+    # closely match the volume of the spherical sector. We calculate a new
+    # angle that makes the pyramid's corners touch the spherical boundary.
+    az_half = sensor_params["az_half_angle"]
+    el_half = sensor_params["el_half_angle"]
+    bounding_angle = np.arctan(np.sqrt(np.tan(az_half) ** 2 + np.tan(el_half) ** 2))
+
+    ground_truth_params = sensor_params.copy()
+    ground_truth_params["az_half_angle"] = bounding_angle
+    ground_truth_params["el_half_angle"] = bounding_angle
+
+    ground_truth_config = SensorConfiguration(
+        "ground_truth", **ground_truth_params, strategy=PyramidalSATStrategy()
+    )
+
+    all_results: dict[str, defaultdict[str, int]] = {}
     print(f"Running benchmark on {num_volumes} volumes...")
-    for name, test_config in configs.items():
-        platform = Platform(
-            "p1",
-            np.zeros(3),
-            np.zeros(3),
-            components=[ground_truth_config, test_config],
+
+    platform = Platform(
+        "p1", np.zeros(3), np.zeros(3), components=[ground_truth_config, test_config]
+    )
+    stats: defaultdict[str, int] = defaultdict(int)
+    for volume in volumes:
+        ground_truth = platform.can_observe_volume(
+            volume, sensor_names=["ground_truth"]
         )
-        stats = defaultdict(int)
-        for volume in volumes:
-            ground_truth = platform.can_observe_volume(
-                volume, sensor_names=["ground_truth"]
-            )
-            strategy_result = platform.can_observe_volume(
-                volume, sensor_names=[test_config.name]
-            )
+        strategy_result = platform.can_observe_volume(volume, sensor_names=["sph"])
 
-            if strategy_result and ground_truth:
-                stats["TP"] += 1
-            elif strategy_result and not ground_truth:
-                stats["FP"] += 1
-            elif not strategy_result and not ground_truth:
-                stats["TN"] += 1
-            elif not strategy_result and ground_truth:
-                stats["FN"] += 1
-        all_results[name] = stats
+        if strategy_result and ground_truth:
+            stats["TP"] += 1
+        elif strategy_result and not ground_truth:
+            stats["FP"] += 1
+        elif not strategy_result and not ground_truth:
+            stats["TN"] += 1
+        elif not strategy_result and ground_truth:
+            stats["FN"] += 1
+    all_results["Spherical (Accurate)"] = stats
 
-    print("\n--- Accuracy Results (vs. Pyramidal SAT Ground Truth) ---")
+    print("\n--- Accuracy Results (vs. Volume-Matched Pyramidal SAT) ---")
     for name, stats in all_results.items():
         tp, fp, tn, fn = stats["TP"], stats["FP"], stats["TN"], stats["FN"]
-        accuracy = (tp + tn) / (tp + fp + tn + fn) if (tp + fp + tn + fn) > 0 else 0
+        total = tp + fp + tn + fn
+        accuracy = (tp + tn) / total if total > 0 else 0
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
         print(f"  Strategy: {name}")
         print(f"    TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}")
         print(f"    Accuracy: {accuracy:.2%}, Precision: {precision:.2%}")
+
+    return all_results
 
 
 if __name__ == "__main__":
     NUM_OBJECTS = 5000
 
     perf_title, perf_labels, perf_values = benchmark_performance(NUM_OBJECTS)
-    benchmark_accuracy(NUM_OBJECTS)
+    accuracy_results = benchmark_accuracy(NUM_OBJECTS)
 
     print("\nGenerating comparison graphs...")
-    fig = go.Figure(
+
+    # --- Performance Figure ---
+    fig1 = go.Figure(
         data=[
             go.Bar(
                 x=perf_labels,
@@ -172,8 +183,23 @@ if __name__ == "__main__":
             )
         ]
     )
-    fig.update_layout(
+    fig1.update_layout(
         title_text=f"<b>{perf_title}</b><br>({NUM_OBJECTS} objects)",
         yaxis_title="Total Execution Time (ms)",
     )
-    fig.show()
+
+    # --- Accuracy Figure ---
+    fig2 = go.Figure()
+    for name, stats in accuracy_results.items():
+        labels = ["TP", "FP", "TN", "FN"]
+        values = [stats["TP"], stats["FP"], stats["TN"], stats["FN"]]
+        fig2.add_trace(go.Bar(name=name, x=labels, y=values, text=values))
+
+    fig2.update_layout(
+        title_text=f"<b>Accuracy Benchmark Results</b><br>({NUM_OBJECTS} objects vs. SAT)",
+        yaxis_title="Count",
+        barmode="group",
+    )
+
+    fig1.show()
+    fig2.show()
