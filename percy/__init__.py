@@ -259,23 +259,33 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
         return world_rotation.apply(x_forward_verts) + sensor.position
 
     def _run_sat_check(self, v1: np.ndarray, v2: np.ndarray) -> bool:
-        v1, v2 = v1.astype(np.float64), v2.astype(np.float64)
+        # Ensure arrays are C-contiguous for optimal Numba performance
+        v1 = np.ascontiguousarray(v1, dtype=np.float64)
+        v2 = np.ascontiguousarray(v2, dtype=np.float64)
         try:
             h1, h2 = Delaunay(v1, qhull_options="QJ"), Delaunay(v2, qhull_options="QJ")
         except Exception:
             return True
-        if not _is_overlapping_jit(self._get_face_normals(h1), v1, v2):
+
+        axes1 = self._get_face_normals(h1)
+        if not _is_overlapping_jit(axes1, v1, v2):
             return False
-        if not _is_overlapping_jit(self._get_face_normals(h2), v1, v2):
+
+        axes2 = self._get_face_normals(h2)
+        if not _is_overlapping_jit(axes2, v1, v2):
             return False
-        for e1 in self._get_edges(h1):
-            for e2 in self._get_edges(h2):
+
+        edges1 = self._get_edges(h1)
+        edges2 = self._get_edges(h2)
+        for e1 in edges1:
+            for e2 in edges2:
                 axis = np.cross(e1, e2)
                 norm = np.linalg.norm(axis)
-                if norm > 1e-6 and not _is_overlapping_jit(
-                    np.array([axis / norm]), v1, v2
-                ):
-                    return False
+                if norm > 1e-6:
+                    # Ensure axis is contiguous
+                    axis = np.ascontiguousarray(axis / norm)
+                    if not _is_overlapping_jit(axis.reshape(1, 3), v1, v2):
+                        return False
         return True
 
     def _get_face_normals(self, hull: Delaunay) -> np.ndarray:
@@ -286,7 +296,8 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
             norm = np.linalg.norm(normal)
             if norm > 1e-6:
                 normals.append(normal / norm)
-        return np.array(normals)
+        # Ensure the final array is contiguous
+        return np.ascontiguousarray(normals, dtype=np.float64)
 
     def _get_edges(self, hull: Delaunay) -> np.ndarray:
         edges = set()
@@ -294,7 +305,10 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
             for i in range(3):
                 p1_idx, p2_idx = tuple(sorted((simplex[i], simplex[(i + 1) % 3])))
                 edges.add((p1_idx, p2_idx))
-        return np.array([hull.points[p2] - hull.points[p1] for p1, p2 in edges])
+        # Ensure the final array is contiguous
+        return np.ascontiguousarray(
+            [hull.points[p2] - hull.points[p1] for p1, p2 in edges], dtype=np.float64
+        )
 
 
 class SphericalAccurateStrategy(FoRIntersectionStrategy):
