@@ -34,3 +34,9 @@ dev = [
     "pre-commit>=4.3.0",
     "ruff>=0.14.1",
 ]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'win32'",  # For Windows
+    "sys_platform == 'linux'",  # For Linux
+]
