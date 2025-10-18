@@ -152,7 +152,7 @@ def plot_spherical_for(
             y=near_world[..., 1],
             z=near_world[..., 2],
             colorscale=[[0, color], [1, color]],
-            opacity=0.1,
+            opacity=0.2,
             showscale=False,
             name=name,
         ),
@@ -161,7 +161,7 @@ def plot_spherical_for(
             y=far_world[..., 1],
             z=far_world[..., 2],
             colorscale=[[0, color], [1, color]],
-            opacity=0.1,
+            opacity=0.2,
             showscale=False,
             showlegend=False,
         ),
@@ -178,7 +178,7 @@ def plot_spherical_for(
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
                 showlegend=False,
-                opacity=0.1,
+                opacity=0.2,
             )
         )
         # Left and Right sides (connecting along azimuth edges)
@@ -190,7 +190,7 @@ def plot_spherical_for(
                 colorscale=[[0, color], [1, color]],
                 showscale=False,
                 showlegend=False,
-                opacity=0.1,
+                opacity=0.2,
             )
         )
 
@@ -227,22 +227,23 @@ def visualise_scene(platforms: Sequence[Platform], volumes: list[np.ndarray]):
         for trace in get_platform_axes_plot(platform):
             fig.add_trace(trace)
 
+    hit_colour = "limegreen"
+    miss_colour = "red"
     for sensor in all_world_sensors:
         is_hit = id(sensor) in sensors_with_hits
-        hit_color = "limegreen"
 
         if isinstance(sensor.strategy, PyramidalSATStrategy):
             fig.add_trace(
-                plot_pyramidal_for(sensor, color=hit_color if is_hit else "red")
+                plot_pyramidal_for(sensor, color=hit_colour if is_hit else miss_colour)
             )
         elif isinstance(sensor.strategy, SphericalAccurateStrategy):
             for trace in plot_spherical_for(
-                sensor, color=hit_color if is_hit else "red"
+                sensor, color=hit_colour if is_hit else miss_colour
             ):
                 fig.add_trace(trace)
 
     for i, volume in enumerate(volumes):
-        color = "limegreen" if i in volumes_that_are_seen else "red"
+        color = hit_colour if i in volumes_that_are_seen else miss_colour
         fig.add_trace(get_volume_plot(volume, name=f"Target {i + 1}", color=color))
 
     # --- Step 3: Configure and show the final plot ---

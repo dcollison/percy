@@ -57,36 +57,12 @@ def _warmup_jit_functions():
     performance penalty on the first call in a time-sensitive context.
     """
     try:
-        # A simple cube is a good representative convex shape.
-        box = np.array(
-            [
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 1],
-                [1, 0, 1],
-                [1, 1, 1],
-                [0, 1, 1],
-            ],
-            dtype=np.float64,
-        )
+        box = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=np.float64)
         box2 = box + 2.0
-        axes = np.array(
-            [
-                [1, 0, 0],
-                [-1, 0, 0],
-                [0, 1, 0],
-                [0, -1, 0],
-                [0, 0, 1],
-                [0, 0, -1],
-            ],
-            dtype=np.float64,
-        )
+        axes = np.eye(3, dtype=np.float64)
         _is_overlapping_jit(axes, box, box2)
 
     except Exception:
-        # If warmup fails, the functions will just compile on their first real run.
         pass
 
 
@@ -218,25 +194,25 @@ class FoRIntersectionStrategy(ABC):
 
 
 class PyramidalSATStrategy(FoRIntersectionStrategy):
-    """Intersection strategy for a pyramidal FoR using SAT."""
+    """Intersection strategy for a pyramidal FoR using the exact convex hull (SAT)."""
 
     def check_intersection(
         self, sensor: WorldSpaceSensor, volume_vertices: np.ndarray
     ) -> bool:
         frustum_vertices = self._get_world_vertices(sensor)
-        # Broad-phase AABB check
         if np.any(np.max(frustum_vertices, 0) < np.min(volume_vertices, 0)) or np.any(
             np.max(volume_vertices, 0) < np.min(frustum_vertices, 0)
         ):
             return False
-        # Narrow-phase SAT check
         return self._run_sat_check(frustum_vertices, volume_vertices)
 
     def _get_world_vertices(self, sensor: WorldSpaceSensor) -> np.ndarray:
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
-        nx, ny = sensor.r_min * tan_el, sensor.r_min * tan_az
-        fx, fy = sensor.r_max * tan_el, sensor.r_max * tan_az
-        # Frustum pointing along local +Z axis
+        # In a Z-forward frame (X-right, Y-up), az is in XZ plane, el is in YZ plane.
+        nx = sensor.r_min * tan_az
+        ny = sensor.r_min * tan_el
+        fx = sensor.r_max * tan_az
+        fy = sensor.r_max * tan_el
         local_verts = np.array(
             [
                 [-nx, -ny, sensor.r_min],
@@ -246,20 +222,15 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
                 [-fx, -fy, sensor.r_max],
                 [fx, -fy, sensor.r_max],
                 [fx, fy, sensor.r_max],
-                [-fx, fy, sensor.r_max],
+                [-fx, -fy, sensor.r_max],
             ]
         )
-
-        # Pre-rotate to align with standard coordinate system (+X forward)
         pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
         x_forward_verts = pre_rotation.apply(local_verts)
-
-        # Apply the sensor's actual world rotation
         world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
         return world_rotation.apply(x_forward_verts) + sensor.position
 
     def _run_sat_check(self, v1: np.ndarray, v2: np.ndarray) -> bool:
-        # Ensure arrays are C-contiguous for optimal Numba performance
         v1 = np.ascontiguousarray(v1, dtype=np.float64)
         v2 = np.ascontiguousarray(v2, dtype=np.float64)
         try:
@@ -282,7 +253,6 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
                 axis = np.cross(e1, e2)
                 norm = np.linalg.norm(axis)
                 if norm > 1e-6:
-                    # Ensure axis is contiguous
                     axis = np.ascontiguousarray(axis / norm)
                     if not _is_overlapping_jit(axis.reshape(1, 3), v1, v2):
                         return False
@@ -296,7 +266,6 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
             norm = np.linalg.norm(normal)
             if norm > 1e-6:
                 normals.append(normal / norm)
-        # Ensure the final array is contiguous
         return np.ascontiguousarray(normals, dtype=np.float64)
 
     def _get_edges(self, hull: Delaunay) -> np.ndarray:
@@ -305,7 +274,6 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
             for i in range(3):
                 p1_idx, p2_idx = tuple(sorted((simplex[i], simplex[(i + 1) % 3])))
                 edges.add((p1_idx, p2_idx))
-        # Ensure the final array is contiguous
         return np.ascontiguousarray(
             [hull.points[p2] - hull.points[p1] for p1, p2 in edges], dtype=np.float64
         )
@@ -320,23 +288,19 @@ class SphericalAccurateStrategy(FoRIntersectionStrategy):
     def check_intersection(
         self, sensor: WorldSpaceSensor, volume_vertices: np.ndarray
     ) -> bool:
-        # Transform vertices into the sensor's local frame (+X is forward)
         world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
         local_vertices = world_rotation.apply(
             volume_vertices - sensor.position, inverse=True
         )
 
-        # --- 1. Fast check for origin containment (sensor inside target AABB) ---
         min_vals = np.min(local_vertices, axis=0)
         max_vals = np.max(local_vertices, axis=0)
         if np.all(min_vals < 0) and np.all(max_vals > 0):
             return True
 
-        # --- 2. Check if any vertex is inside the FoR ---
         x, y, z = local_vertices.T
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
 
-        # Efficiently check if points are inside an elliptical cone along +X
         inside_cone = (y**2 * tan_el**2 + z**2 * tan_az**2) <= (
             x**2 * tan_az**2 * tan_el**2 + 1e-9
         )
@@ -352,7 +316,6 @@ class SphericalAccurateStrategy(FoRIntersectionStrategy):
         if np.any(is_inside):
             return True
 
-        # --- 3. Check for piercing (AABB of target intersects sensor's boresight) ---
         min_y, min_z = min_vals[1], min_vals[2]
         max_y, max_z = max_vals[1], max_vals[2]
         min_x, max_x = min_vals[0], max_vals[0]
