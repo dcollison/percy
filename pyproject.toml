@@ -1,0 +1,35 @@
+[project]
+name = "percy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Dale Collison", email = "dale.a.collison@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "coacd>=1.0.7",
+    "numba>=0.62.1",
+    "numpy>=2.3.4",
+    "plotly>=6.3.1",
+    "pytest>=8.4.2",
+    "scipy>=1.16.2",
+    "scipy-stubs==1.16.2.4",
+]
+
+[project.scripts]
+percy = "percy:main"
+
+[build-system]
+requires = ["uv_build>=0.9.0,<0.10.0"]
+build-backend = "uv_build"
+
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "percy"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.1",
+]
