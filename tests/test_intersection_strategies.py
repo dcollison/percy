@@ -10,8 +10,10 @@ Core Features:
 - Use of pytest.mark.parametrize to test multiple strategies cleanly.
 - Use of `assert` to programmatically verify expected outcomes.
 - A global `ENABLE_PLOTTING` flag to easily turn 3D visualisations for
-    each test case on or off.
+  each test case on or off.
 """
+
+from typing import Type
 
 import numpy as np
 import pytest
@@ -20,7 +22,6 @@ from scipy.spatial.transform import Rotation
 from percy import (
     FoRIntersectionStrategy,
     Platform,
-    PyramidalGJKStrategy,
     PyramidalSATStrategy,
     SensorConfiguration,
     SphericalAccurateStrategy,
@@ -31,7 +32,7 @@ from tests.plotting_tools import visualise_scene
 # Global Test Configuration
 # ======================================================================
 
-ENABLE_PLOTTING: bool = True
+ENABLE_PLOTTING: bool = False
 
 # ======================================================================
 # Helper Functions
@@ -99,11 +100,11 @@ def run_test_case(
 # ======================================================================
 
 
-ALL_STRATEGIES = [PyramidalSATStrategy, PyramidalGJKStrategy, SphericalAccurateStrategy]
+ALL_STRATEGIES = [PyramidalSATStrategy, SphericalAccurateStrategy]
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_simple_hit(strategy_class: type[FoRIntersectionStrategy]):
+def test_simple_hit(strategy_class: Type[FoRIntersectionStrategy]):
     """Volume is directly in front of and inside the sensor's FoR."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -121,7 +122,7 @@ def test_simple_hit(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_simple_miss(strategy_class: type[FoRIntersectionStrategy]):
+def test_simple_miss(strategy_class: Type[FoRIntersectionStrategy]):
     """Volume is far to the side, completely outside the FoR."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -139,7 +140,7 @@ def test_simple_miss(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_volume_behind_sensor(strategy_class: type[FoRIntersectionStrategy]):
+def test_volume_behind_sensor(strategy_class: Type[FoRIntersectionStrategy]):
     """Volume is entirely behind the sensor's origin."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -157,7 +158,7 @@ def test_volume_behind_sensor(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_volume_too_close(strategy_class: type[FoRIntersectionStrategy]):
+def test_volume_too_close(strategy_class: Type[FoRIntersectionStrategy]):
     """Volume is in the view cone but closer than the minimum range."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -175,7 +176,7 @@ def test_volume_too_close(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_volume_too_far(strategy_class: type[FoRIntersectionStrategy]):
+def test_volume_too_far(strategy_class: Type[FoRIntersectionStrategy]):
     """Volume is in the view cone but beyond the maximum range."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -193,7 +194,7 @@ def test_volume_too_far(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_rotated_sensor_hit(strategy_class: type[FoRIntersectionStrategy]):
+def test_rotated_sensor_hit(strategy_class: Type[FoRIntersectionStrategy]):
     """Sensor is rotated to face a volume that would otherwise be missed."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -213,7 +214,7 @@ def test_rotated_sensor_hit(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_piercing_volume_hit(strategy_class: type[FoRIntersectionStrategy]):
+def test_piercing_volume_hit(strategy_class: Type[FoRIntersectionStrategy]):
     """A long, thin volume pierces the FoR without any vertices inside."""
     sensor_config = SensorConfiguration(
         "cam",
@@ -235,7 +236,7 @@ def test_piercing_volume_hit(strategy_class: type[FoRIntersectionStrategy]):
 
 
 @pytest.mark.parametrize("strategy_class", ALL_STRATEGIES)
-def test_sensor_inside_volume(strategy_class: type[FoRIntersectionStrategy]):
+def test_sensor_inside_volume(strategy_class: Type[FoRIntersectionStrategy]):
     """The sensor's origin is located inside the target volume."""
     sensor_config = SensorConfiguration(
         "cam",

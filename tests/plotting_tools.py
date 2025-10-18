@@ -20,7 +20,6 @@ from scipy.spatial.transform import Rotation
 # Import the core simulation classes from the main library
 from percy import (
     Platform,
-    PyramidalGJKStrategy,
     PyramidalSATStrategy,
     SphericalAccurateStrategy,
     WorldSpaceSensor,
@@ -232,7 +231,7 @@ def visualise_scene(platforms: Sequence[Platform], volumes: list[np.ndarray]):
         is_hit = id(sensor) in sensors_with_hits
         hit_color = "limegreen"
 
-        if isinstance(sensor.strategy, (PyramidalSATStrategy, PyramidalGJKStrategy)):
+        if isinstance(sensor.strategy, PyramidalSATStrategy):
             fig.add_trace(
                 plot_pyramidal_for(sensor, color=hit_color if is_hit else "red")
             )

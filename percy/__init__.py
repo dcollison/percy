@@ -45,88 +45,6 @@ def _is_overlapping_jit(axes: np.ndarray, v1: np.ndarray, v2: np.ndarray) -> boo
     return True
 
 
-@numba.njit
-def _gjk_support(vertices: np.ndarray, direction: np.ndarray) -> np.ndarray:
-    """Finds the vertex on a shape that is furthest in a given direction."""
-    max_dot = -np.inf
-    best_vertex = vertices[0]
-    for i in range(vertices.shape[0]):
-        dot = vertices[i] @ direction
-        if dot > max_dot:
-            max_dot = dot
-            best_vertex = vertices[i]
-    return best_vertex
-
-
-@numba.njit
-def _gjk_handle_simplex(
-    simplex: list[np.ndarray], direction: np.ndarray
-) -> tuple[bool, np.ndarray]:
-    """
-    Processes the GJK simplex to check for origin containment and find the
-    new best search direction. This is the core of the GJK algorithm.
-    """
-    if len(simplex) == 2:  # Line case
-        a, b = simplex[1], simplex[0]
-        ab, ao = b - a, -a
-        if np.dot(ab, ao) > 0:
-            return False, np.cross(np.cross(ab, ao), ab)
-        else:
-            simplex.pop(0)
-            return False, ao
-
-    elif len(simplex) == 3:  # Triangle case
-        a, b, c = simplex[2], simplex[1], simplex[0]
-        ab, ac, ao = b - a, c - a, -a
-        abc_perp = np.cross(ab, ac)
-        if np.dot(np.cross(abc_perp, ac), ao) > 0:
-            simplex.pop(1)
-            return False, np.cross(np.cross(ac, ao), ac)
-        if np.dot(np.cross(ab, abc_perp), ao) > 0:
-            simplex.pop(0)
-            return False, np.cross(np.cross(ab, ao), ab)
-        if np.dot(abc_perp, ao) > 0:
-            return False, abc_perp
-        else:
-            return False, -abc_perp
-
-    elif len(simplex) == 4:  # Tetrahedron case
-        a, b, c, d = simplex[3], simplex[2], simplex[1], simplex[0]
-        ab, ac, ad, ao = b - a, c - a, d - a, -a
-        abc_perp = np.cross(ab, ac)
-        if np.dot(abc_perp, ao) > 0:
-            simplex.pop(0)
-            return False, abc_perp
-        acd_perp = np.cross(ac, ad)
-        if np.dot(acd_perp, ao) > 0:
-            simplex.pop(1)
-            return False, acd_perp
-        adb_perp = np.cross(ad, ab)
-        if np.dot(adb_perp, ao) > 0:
-            simplex.pop(2)
-            return False, adb_perp
-        return True, direction
-
-    return False, direction
-
-
-@numba.njit
-def _run_gjk_check_jit(v1: np.ndarray, v2: np.ndarray) -> bool:
-    """A self-contained, JIT-compiled implementation of the GJK algorithm."""
-    direction = np.array([1.0, 0.0, 0.0])
-    simplex = [_gjk_support(v1, direction) - _gjk_support(v2, -direction)]
-    direction = -simplex[0]
-    for _ in range(64):
-        a = _gjk_support(v1, direction) - _gjk_support(v2, -direction)
-        if np.dot(a, direction) < 0:
-            return False
-        simplex.append(a)
-        collides, direction = _gjk_handle_simplex(simplex, direction)
-        if collides:
-            return True
-    return False
-
-
 # ======================================================================
 # JIT Warm-up
 # ======================================================================
@@ -140,7 +58,6 @@ def _warmup_jit_functions():
     """
     try:
         # A simple cube is a good representative convex shape.
-        # It has 8 vertices and 6 faces.
         box = np.array(
             [
                 [0, 0, 0],
@@ -154,13 +71,7 @@ def _warmup_jit_functions():
             ],
             dtype=np.float64,
         )
-
-        # Warm up GJK with two distinct objects
         box2 = box + 2.0
-        _run_gjk_check_jit(box, box2)
-
-        # Warm up SAT and its helper `_project_jit` with an `axes` array
-        # that has a more realistic shape (e.g., 6 normals for a cube).
         axes = np.array(
             [
                 [1, 0, 0],
@@ -175,12 +86,10 @@ def _warmup_jit_functions():
         _is_overlapping_jit(axes, box, box2)
 
     except Exception:
-        # If warmup fails (e.g., due to library issues), it's not critical.
-        # The functions will just compile on their first real run.
+        # If warmup fails, the functions will just compile on their first real run.
         pass
 
 
-# Run the warmup procedure when the module is imported.
 _warmup_jit_functions()
 
 
@@ -315,16 +224,18 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
         self, sensor: WorldSpaceSensor, volume_vertices: np.ndarray
     ) -> bool:
         frustum_vertices = self._get_world_vertices(sensor)
+        # Broad-phase AABB check
         if np.any(np.max(frustum_vertices, 0) < np.min(volume_vertices, 0)) or np.any(
             np.max(volume_vertices, 0) < np.min(frustum_vertices, 0)
         ):
             return False
+        # Narrow-phase SAT check
         return self._run_sat_check(frustum_vertices, volume_vertices)
 
     def _get_world_vertices(self, sensor: WorldSpaceSensor) -> np.ndarray:
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
-        nx, ny = sensor.r_min * tan_az, sensor.r_min * tan_el
-        fx, fy = sensor.r_max * tan_az, sensor.r_max * tan_el
+        nx, ny = sensor.r_min * tan_el, sensor.r_min * tan_az
+        fx, fy = sensor.r_max * tan_el, sensor.r_max * tan_az
         # Frustum pointing along local +Z axis
         local_verts = np.array(
             [
@@ -340,7 +251,6 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
         )
 
         # Pre-rotate to align with standard coordinate system (+X forward)
-        # A +90 degree pitch makes the +Z pointing vector become +X
         pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
         x_forward_verts = pre_rotation.apply(local_verts)
 
@@ -387,48 +297,6 @@ class PyramidalSATStrategy(FoRIntersectionStrategy):
         return np.array([hull.points[p2] - hull.points[p1] for p1, p2 in edges])
 
 
-class PyramidalGJKStrategy(FoRIntersectionStrategy):
-    """Intersection strategy for a pyramidal FoR using GJK."""
-
-    def check_intersection(
-        self, sensor: WorldSpaceSensor, volume_vertices: np.ndarray
-    ) -> bool:
-        frustum_vertices = self._get_world_vertices(sensor)
-        if np.any(np.max(frustum_vertices, 0) < np.min(volume_vertices, 0)) or np.any(
-            np.max(volume_vertices, 0) < np.min(frustum_vertices, 0)
-        ):
-            return False
-        return _run_gjk_check_jit(
-            frustum_vertices.astype(np.float64), volume_vertices.astype(np.float64)
-        )
-
-    def _get_world_vertices(self, sensor: WorldSpaceSensor) -> np.ndarray:
-        tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
-        nx, ny = sensor.r_min * tan_az, sensor.r_min * tan_el
-        fx, fy = sensor.r_max * tan_az, sensor.r_max * tan_el
-        # Frustum pointing along local +Z axis
-        local_verts = np.array(
-            [
-                [-nx, -ny, sensor.r_min],
-                [nx, -ny, sensor.r_min],
-                [nx, ny, sensor.r_min],
-                [-nx, ny, sensor.r_min],
-                [-fx, -fy, sensor.r_max],
-                [fx, -fy, sensor.r_max],
-                [fx, fy, sensor.r_max],
-                [-fx, fy, sensor.r_max],
-            ]
-        )
-
-        # Pre-rotate to align with standard coordinate system (+X forward)
-        pre_rotation = Rotation.from_euler("y", np.pi / 2, degrees=False)
-        x_forward_verts = pre_rotation.apply(local_verts)
-
-        # Apply the sensor's actual world rotation
-        world_rotation = Rotation.from_euler("zyx", sensor.rpy[[2, 1, 0]])
-        return world_rotation.apply(x_forward_verts) + sensor.position
-
-
 class SphericalAccurateStrategy(FoRIntersectionStrategy):
     """
     A robust strategy for a directional spherical sector FoR that handles
@@ -455,8 +323,6 @@ class SphericalAccurateStrategy(FoRIntersectionStrategy):
         tan_az, tan_el = np.tan(sensor.az_half_angle), np.tan(sensor.el_half_angle)
 
         # Efficiently check if points are inside an elliptical cone along +X
-        # The equation is: (y^2 / (x*tan_az)^2) + (z^2 / (x*tan_el)^2) <= 1
-        # We rearrange to avoid division: y^2*tan_el^2 + z^2*tan_az^2 <= x^2*tan_az^2*tan_el^2
         inside_cone = (y**2 * tan_el**2 + z**2 * tan_az**2) <= (
             x**2 * tan_az**2 * tan_el**2 + 1e-9
         )
@@ -473,17 +339,13 @@ class SphericalAccurateStrategy(FoRIntersectionStrategy):
             return True
 
         # --- 3. Check for piercing (AABB of target intersects sensor's boresight) ---
-        # This is an approximation that catches many "stabbing" cases where no
-        # vertex is inside the FoR, but the volume still passes through it.
         min_y, min_z = min_vals[1], min_vals[2]
         max_y, max_z = max_vals[1], max_vals[2]
         min_x, max_x = min_vals[0], max_vals[0]
 
-        # Check if the X-axis (boresight) passes through the YZ-plane AABB
         x_axis_pierces_yz_plane = (
             min_y <= 0 and max_y >= 0 and min_z <= 0 and max_z >= 0
         )
-        # Check if the range of the AABB overlaps with the sensor's min/max range
         x_ranges_overlap = max_x >= sensor.r_min and min_x <= sensor.r_max
 
         if x_axis_pierces_yz_plane and x_ranges_overlap:
@@ -522,7 +384,7 @@ if __name__ == "__main__":
         r_max=40.0,
         az_half_angle=np.pi / 12,
         el_half_angle=np.pi / 12,
-        strategy=PyramidalGJKStrategy(),
+        strategy=PyramidalSATStrategy(),
     )
     radar_config = SensorConfiguration(
         name="radar",

@@ -8,16 +8,16 @@ This script quantitatively compares the different FoR strategies in two key area
 """
 
 import time
+from collections import defaultdict
+
 import numpy as np
 import plotly.graph_objects as go
 from scipy.spatial.transform import Rotation
-from collections import defaultdict
 
 from percy import (
     Platform,
-    SensorConfiguration,
     PyramidalSATStrategy,
-    PyramidalGJKStrategy,
+    SensorConfiguration,
     SphericalAccurateStrategy,
 )
 
@@ -39,9 +39,9 @@ def create_random_cuboid(
             for z in [-half_size[2], half_size[2]]
         ]
     )
-    random_rotation = Rotation.random().as_matrix()
+    random_rotation = Rotation.random()
     random_position = np.random.uniform(*center_range, size=3)
-    return base_vertices @ random_rotation.T + random_position
+    return random_rotation.apply(base_vertices) + random_position
 
 
 # ======================================================================
@@ -66,9 +66,6 @@ def benchmark_performance(num_volumes: int):
     models = {
         "Pyramidal (SAT)": SensorConfiguration(
             "sat", **sensor_params, strategy=PyramidalSATStrategy()
-        ),
-        "Pyramidal (GJK)": SensorConfiguration(
-            "gjk", **sensor_params, strategy=PyramidalGJKStrategy()
         ),
         "Spherical (Accurate)": SensorConfiguration(
             "acc_sph", **sensor_params, strategy=SphericalAccurateStrategy()
